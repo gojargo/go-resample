@@ -1,0 +1,15 @@
+# Test binaries and build output
+*.test
+*.exe
+*.out
+
+# Coverage
+*.cov
+coverage.txt
+coverage.html
+
+# Editor / OS cruft
+.DS_Store
+*~
+.idea/
+.vscode/
