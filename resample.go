@@ -142,6 +142,9 @@ func (r *Resampler) SetRatio(ratio float64) error {
 // Note: Process absorbs all InputFrames of d.In into an internal buffer, so
 // InputFramesUsed always equals InputFrames. To drain output that did not fit
 // in Out, call again with InputFrames == 0.
+//
+// Once the internal buffer has grown to the steady-state working-set size,
+// Process performs no heap allocations.
 func (r *Resampler) Process(d *Data) error {
 	if d == nil || d.Out == nil {
 		return ErrBadData
@@ -219,8 +222,8 @@ type kernel interface {
 }
 
 // streamState holds the sample-stream bookkeeping shared by all kernels: a
-// history buffer of not-yet-consumed input and the fractional read position of
-// the next output within (history ++ new input).
+// history buffer of retained input (which also doubles as the reusable working
+// buffer) and the fractional read position of the next output within it.
 type streamState struct {
 	history []float32
 	inPos   float64
@@ -238,11 +241,12 @@ func (r *Resampler) streamProcess(d *Data) {
 	ch := r.channels
 	st := &r.state
 
-	// Assemble the working buffer: retained history followed by new input.
+	// Append the new input onto the retained history in place. The history slice
+	// doubles as the working buffer: append reuses its spare capacity, so once
+	// the working set stabilises this does not allocate (no per-call make).
 	inN := d.InputFrames * ch
-	buf := make([]float32, len(st.history)+inN)
-	n := copy(buf, st.history)
-	copy(buf[n:], d.In[:inN])
+	buf := append(st.history, d.In[:inN]...)
+	st.history = buf
 	bufFrames := len(buf) / ch
 
 	if !st.primed {
@@ -300,8 +304,14 @@ func (r *Resampler) streamProcess(d *Data) {
 	if dropTo > bufFrames {
 		dropTo = bufFrames
 	}
-	st.history = append(st.history[:0], buf[dropTo*ch:]...)
-	st.inPos -= float64(dropTo)
+	// Compact in place: slide the retained tail down to the front of the same
+	// backing array (copy handles the overlap), keeping the buffer bounded and
+	// its capacity available for reuse next call. No allocation.
+	if dropTo > 0 {
+		m := copy(buf, buf[dropTo*ch:])
+		st.history = buf[:m]
+		st.inPos -= float64(dropTo)
+	}
 
 	d.InputFramesUsed = d.InputFrames
 	d.OutputFramesGen = outGen / ch
