@@ -42,19 +42,3 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
-
-  coverage:
-    name: coverage
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - name: Test with coverage
-        run: go test -covermode=atomic -coverprofile=coverage.out ./...
-      - name: Upload to Codecov
-        uses: codecov/codecov-action@v5
-        with:
-          files: coverage.out
-          fail_ci_if_error: false

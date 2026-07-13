@@ -2,8 +2,6 @@
 
 [![CI](https://github.com/gojargo/go-resample/actions/workflows/ci.yml/badge.svg)](https://github.com/gojargo/go-resample/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/gojargo/go-resample.svg)](https://pkg.go.dev/github.com/gojargo/go-resample)
-[![Go Report Card](https://goreportcard.com/badge/github.com/gojargo/go-resample)](https://goreportcard.com/report/github.com/gojargo/go-resample)
-[![codecov](https://codecov.io/gh/gojargo/go-resample/branch/main/graph/badge.svg)](https://codecov.io/gh/gojargo/go-resample)
 
 A pure-Go (no cgo) audio sample-rate converter.
 
