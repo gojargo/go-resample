@@ -19,3 +19,6 @@ coverage.html
 
 # Fuzz corpus generated locally by go test -fuzz
 /testdata/fuzz/
+
+# GoReleaser output
+/dist/

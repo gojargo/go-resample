@@ -1,0 +1,38 @@
+# go-resample is a library: a release publishes the source archive, a
+# checksums file and its keyless cosign signature, plus build provenance
+# (attested by the release workflow). See https://goreleaser.com.
+version: 2
+
+project_name: go-resample
+
+builds:
+  - skip: true
+
+source:
+  enabled: true
+  name_template: "{{ .ProjectName }}_{{ .Version }}_source"
+  format: tar.gz
+
+checksum:
+  name_template: "checksums.txt"
+
+# Sign the checksums file with cosign keyless (Sigstore, OIDC in CI), which
+# transitively covers the source archive. Produces checksums.txt.sig and
+# checksums.txt.pem, which OpenSSF Scorecard's Signed-Releases check looks
+# for. Verification is described in SECURITY.md.
+signs:
+  - cmd: cosign
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-signature=${signature}"
+      - "--output-certificate=${certificate}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
+# Release notes come from CHANGELOG.md (see .github/workflows/release.yml).
+changelog:
+  disable: true
