@@ -7,7 +7,7 @@
 
 A pure-Go (no cgo) audio sample-rate converter.
 
-- **No cgo** — cross-compiles and links cleanly into static Go binaries.
+- **No cgo**: cross-compiles and links cleanly into static Go binaries.
 - **Arbitrary & time-varying ratios** in `[1/256, 256]` (`ratio = output_rate / input_rate`).
 - **Interleaved `float32`** frames, any channel count.
 
@@ -66,7 +66,7 @@ Measured by the FFT harness in [`quality_test.go`](./quality_test.go)
 (`go test -run Report -v`), worst case across the passband; CI enforces
 conservative floors below these values.
 
-| Converter | SNR (2× up) | Stopband rejection (2× down) | −3 dB bandwidth |
+| Converter | SNR (2× up) | Stopband rejection (2× down) | -3 dB bandwidth |
 |---|---|---|---|
 | `SincBestQuality` | ~158 dB | ~157 dB | 95% |
 | `SincMediumQuality` | ~123 dB | ~92 dB | 87% |
@@ -99,5 +99,5 @@ go test -run '^$' -fuzz FuzzProcess  # fuzz the streaming API
 
 ## License
 
-BSD-2-Clause — see [`LICENSE`](./LICENSE). Credit for the reference
+BSD-2-Clause. See [`LICENSE`](./LICENSE). Credit for the reference
 implementation this work is based on is in [`NOTICE`](./NOTICE).
