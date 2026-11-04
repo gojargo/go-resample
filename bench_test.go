@@ -11,7 +11,10 @@ import (
 // a single stream at the input rate runs on one core.
 
 func benchmarkProcess(b *testing.B, conv Converter, inRate, outRate int) {
-	const channels = 2
+	benchmarkProcessCh(b, conv, inRate, outRate, 2)
+}
+
+func benchmarkProcessCh(b *testing.B, conv Converter, inRate, outRate, channels int) {
 	frames := inRate / 50 // 20 ms
 	ratio := float64(outRate) / float64(inRate)
 

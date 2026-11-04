@@ -72,6 +72,11 @@ conservative floors below these values.
 | `SincMediumQuality` | ~123 dB | ~92 dB | 87% |
 | `SincFastest` | ~97 dB | ~85 dB | 78% |
 
+Bandwidth is relative to the output Nyquist frequency when downsampling. To
+downsample to a speech rate (for example 48 kHz to 16 kHz) without dulling
+the top of the band, prefer `SincBestQuality`: its passband reaches 95% of the
+new Nyquist frequency, against 87% for `SincMediumQuality`.
+
 The [`test/`](./test) directory holds a separate differential harness that
 compares the output against libsoxr (requires cgo and libsoxr).
 
@@ -82,10 +87,17 @@ x86-64 desktop; expect roughly these orders of magnitude:
 
 | Converter | 44.1 → 48 kHz | 16 → 48 kHz | 48 → 16 kHz |
 |---|---|---|---|
-| `SincBestQuality` | ~120× real time | ~115× | ~115× |
-| `SincMediumQuality` | ~260× | ~200× | ~230× |
-| `SincFastest` | ~330× | ~310× | ~400× |
-| `Linear` | ~1400× | ~1300× | ~5500× |
+| `SincBestQuality` | ~180× real time | ~200× | ~165× |
+| `SincMediumQuality` | ~390× | ~390× | ~380× |
+| `SincFastest` | ~570× | ~570× | ~770× |
+| `Linear` | ~1500× | ~1300× | ~3600× |
+
+When the ratio is a fraction with a small denominator, as for every standard
+pair of audio rates, the sinc converters precompute the filter coefficients
+for each position the stream can reach and track the read position exactly
+(the "direct" mode of the Speex resampler). Arbitrary or continuously varying
+ratios use the general interpolating path. The precomputed tables are built
+on a stream's first `Process` call and shared by all streams in the process.
 
 ## Testing
 

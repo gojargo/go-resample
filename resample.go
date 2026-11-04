@@ -86,6 +86,7 @@ type Resampler struct {
 	state     streamState
 	lastRatio float64
 	started   bool
+	prepared  bool // precomputed-phase tables looked up for the first ratio
 }
 
 // New creates a Resampler for the given converter and channel count.
@@ -123,6 +124,7 @@ func (r *Resampler) Reset() {
 	r.state.reset()
 	r.lastRatio = 0
 	r.started = false
+	r.prepared = false
 }
 
 // SetRatio forces an immediate (step, not ramped) change of the conversion
@@ -153,7 +155,10 @@ func (r *Resampler) SetRatio(ratio float64) error {
 // in Out, call again with InputFrames == 0.
 //
 // Once the internal buffer has grown to the steady-state working-set size,
-// Process performs no heap allocations.
+// Process performs no heap allocations, even if the ratio changes. The first
+// call (and the first after [Resampler.Reset]) may also build the sinc
+// converters' precomputed-phase tables for its ratio; those are shared by all
+// Resamplers in the process, so this happens once per converter and ratio.
 func (r *Resampler) Process(d *Data) error {
 	if d == nil || d.Out == nil {
 		return ErrBadData
@@ -174,6 +179,16 @@ func (r *Resampler) Process(d *Data) error {
 		// No ramp on the very first block.
 		r.lastRatio = d.Ratio
 		r.started = true
+	}
+	if !r.prepared {
+		// Set up precomputed-phase evaluation (phase.go) for the stream's
+		// ratio. Done only on the first call, which allocates anyway, so a
+		// warmed-up Process never allocates even if the ratio later changes;
+		// other ratios simply use the general path.
+		if sk, ok := r.kernel.(*sincKernel); ok {
+			sk.preparePhases(d.Ratio)
+		}
+		r.prepared = true
 	}
 	r.streamProcess(d)
 	return nil
@@ -279,12 +294,38 @@ type streamState struct {
 	history []float32
 	inPos   float64
 	primed  bool
+
+	// Exact position used with precomputed phases: frame ipos plus
+	// phase/phases. Valid while exact is true; inPos is kept in sync.
+	exact bool
+	ipos  int
+	phase int
 }
 
 func (s *streamState) reset() {
 	s.history = s.history[:0]
 	s.inPos = 0
 	s.primed = false
+	s.exact = false
+}
+
+// enterExact switches to exact phase tracking if inPos lies on (within 1e-6 of)
+// one of the phases positions per frame. That holds from the start of a
+// stream and whenever the ratio has been constant; after a ramp it generally
+// does not, and the general path is used instead.
+func (s *streamState) enterExact(phases int) bool {
+	b := math.Floor(s.inPos)
+	j := (s.inPos - b) * float64(phases)
+	jr := math.Round(j)
+	if math.Abs(j-jr) > 1e-6 {
+		return false
+	}
+	s.ipos, s.phase = int(b), int(jr)
+	if s.phase == phases {
+		s.ipos, s.phase = s.ipos+1, 0
+	}
+	s.exact = true
+	return true
 }
 
 // streamProcess is the shared engine driving every kernel.
@@ -311,7 +352,34 @@ func (r *Resampler) streamProcess(d *Data) {
 	target := d.Ratio
 	ratio := target
 
-	for outGen < outCap {
+	sk, _ := r.kernel.(*sincKernel)
+	direct := false
+	if sk != nil && sk.pt != nil && last == target && target == sk.ptRatio {
+		direct = st.exact || st.enterExact(sk.pt.phases)
+	} else {
+		st.exact = false
+	}
+
+	if direct {
+		// Constant ratio with precomputed phases: exact integer stepping.
+		phases, step := sk.pt.phases, sk.phaseStep
+		rc := min(target, 1)
+		_, right := sk.support(rc)
+		for outGen < outCap {
+			base := st.ipos
+			if base+right >= bufFrames && (!d.EndOfInput || base >= bufFrames) {
+				break // need more input, or all input consumed
+			}
+			sk.outputPhase(buf, ch, base, st.phase, rc, d.Out[outGen:outGen+ch])
+			outGen += ch
+			st.phase += step
+			st.ipos += st.phase / phases
+			st.phase %= phases
+		}
+		st.inPos = float64(st.ipos) + float64(st.phase)/float64(phases)
+	}
+
+	for !direct && outGen < outCap {
 		// Linearly ramp the ratio across the requested output block.
 		if d.OutputFrames > 0 {
 			ratio = last + float64(outGen/ch)*(target-last)/float64(d.OutputFrames)
@@ -346,6 +414,9 @@ func (r *Resampler) streamProcess(d *Data) {
 	}
 	left, _ := r.kernel.support(rcNext)
 	nextBase := int(math.Floor(st.inPos))
+	if st.exact {
+		nextBase = st.ipos
+	}
 	dropTo := nextBase - left
 	if dropTo < 0 {
 		dropTo = 0
@@ -360,6 +431,7 @@ func (r *Resampler) streamProcess(d *Data) {
 		m := copy(buf, buf[dropTo*ch:])
 		st.history = buf[:m]
 		st.inPos -= float64(dropTo)
+		st.ipos -= dropTo
 	}
 
 	d.InputFramesUsed = d.InputFrames

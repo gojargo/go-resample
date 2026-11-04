@@ -49,6 +49,23 @@ type sincKernel struct {
 	indexInc     float64   // = l (table entries per input sample at unity increment)
 	zeroX        int
 	acc          []float64 // per-channel accumulators (2*channels), reused per frame
+	params       *sincParams
+
+	// Precomputed-phase state (see phase.go), set by preparePhases.
+	pt        *phaseTable
+	ptRatio   float64 // ratio pt was built for
+	phaseStep int     // phase advance per output frame
+}
+
+// preparePhases looks up (building if needed) the phase table for ratio. It
+// reports whether direct evaluation is available at that ratio.
+func (s *sincKernel) preparePhases(ratio float64) bool {
+	if s.pt != nil && s.ptRatio == ratio {
+		return true
+	}
+	t, step := phaseTableFor(s.params, ratio)
+	s.pt, s.ptRatio, s.phaseStep = t, ratio, step
+	return t != nil
 }
 
 func newSincKernel(p *sincParams, channels int) *sincKernel {
@@ -58,6 +75,7 @@ func newSincKernel(p *sincParams, channels int) *sincKernel {
 		indexInc:     float64(p.l),
 		zeroX:        p.zeroX,
 		acc:          make([]float64, 2*channels),
+		params:       p,
 	}
 }
 

@@ -11,7 +11,8 @@ import (
 //   - Process never fails or panics on valid arguments,
 //   - frame accounting is consistent,
 //   - output is finite and bounded for bounded input,
-//   - streaming matches a one-shot Simple conversion of the same input.
+//   - streaming matches a one-shot Simple conversion of the same input,
+//   - the precomputed-phase path matches the general interpolating path.
 //
 // `go test` runs the seed corpus; `go test -fuzz=FuzzProcess` explores further.
 func FuzzProcess(f *testing.F) {
@@ -24,9 +25,13 @@ func FuzzProcess(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data []byte, convSel, chSel uint8, ratioSel, chunkSel, outSel uint16) {
 		conv := Converter(int(convSel) % 5)
 		ch := 1 + int(chSel)%4
-		// Log-uniform ratio in [1/16, 16): wide enough to cover heavy up- and
-		// downsampling while keeping each case fast.
+		// Half the inputs use a standard rate pair (which takes the
+		// precomputed-phase path), half a log-uniform ratio in [1/16, 16).
+		standard := []float64{48000.0 / 44100.0, 44100.0 / 48000.0, 3, 1.0 / 3, 6, 1.0 / 6, 2, 0.5, 44100.0 / 16000.0, 16000.0 / 44100.0}
 		ratio := math.Exp2(float64(ratioSel%1024)/1024*8 - 4)
+		if ratioSel&1024 != 0 {
+			ratio = standard[int(ratioSel)%len(standard)]
+		}
 		chunk := 1 + int(chunkSel)%512
 		outCap := 1 + int(outSel)%1024
 
@@ -62,6 +67,18 @@ func FuzzProcess(f *testing.F) {
 		for i := 0; i < min(len(got), len(want)); i++ {
 			if e := math.Abs(float64(got[i] - want[i])); e > 1e-4 {
 				t.Fatalf("sample %d: streamed %g vs Simple %g", i, got[i], want[i])
+			}
+		}
+
+		// The precomputed-phase path must match the general path.
+		var general []float32
+		withPhaseTables(false, func() { general, err = Simple(in, ratio, ch, conv) })
+		if err != nil || len(general) != len(want) {
+			t.Fatalf("general path: %d frames (err %v), precomputed %d", len(general)/ch, err, len(want)/ch)
+		}
+		for i := range general {
+			if e := math.Abs(float64(general[i] - want[i])); e > 1e-4 {
+				t.Fatalf("sample %d: general path %g vs precomputed %g", i, general[i], want[i])
 			}
 		}
 	})
