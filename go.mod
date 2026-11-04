@@ -1,3 +1,3 @@
 module github.com/gojargo/go-resample
 
-go 1.26
+go 1.22

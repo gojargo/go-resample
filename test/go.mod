@@ -3,7 +3,7 @@
 // into this directory. This tool requires libsoxr (pkg-config: soxr).
 module github.com/gojargo/go-resample/test
 
-go 1.26
+go 1.22
 
 require github.com/gojargo/go-resample v0.1.0
 
