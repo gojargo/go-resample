@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/gojargo/go-resample/actions/workflows/ci.yml/badge.svg)](https://github.com/gojargo/go-resample/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/gojargo/go-resample.svg)](https://pkg.go.dev/github.com/gojargo/go-resample)
+[![codecov](https://codecov.io/gh/gojargo/go-resample/graph/badge.svg)](https://codecov.io/gh/gojargo/go-resample)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/gojargo/go-resample/badge)](https://scorecard.dev/viewer/?uri=github.com/gojargo/go-resample)
 
 A pure-Go (no cgo) audio sample-rate converter.
 
@@ -43,6 +45,56 @@ d := &resample.Data{
 }
 _ = r.Process(d)
 // d.OutputFramesGen frames written; call again to feed more / drain.
+```
+
+Streaming notes:
+
+- `Process` always consumes all of `InputFrames`. If `Out` was too small for
+  everything that input can produce, call again with `InputFrames: 0` to drain.
+- `Process` performs no heap allocations once warmed up, so it is safe to call
+  from a real-time audio callback.
+- Changing `Ratio` between calls ramps it smoothly over `OutputFrames`; use
+  `SetRatio` for an immediate step change.
+- A `Resampler` is not safe for concurrent use; use one per stream. Separate
+  `Resampler`s can run in parallel freely (filter tables are shared read-only).
+
+Requires Go 1.22 or later.
+
+## Quality
+
+Measured by the FFT harness in [`quality_test.go`](./quality_test.go)
+(`go test -run Report -v`), worst case across the passband; CI enforces
+conservative floors below these values.
+
+| Converter | SNR (2× up) | Stopband rejection (2× down) | −3 dB bandwidth |
+|---|---|---|---|
+| `SincBestQuality` | ~158 dB | ~157 dB | 95% |
+| `SincMediumQuality` | ~123 dB | ~92 dB | 87% |
+| `SincFastest` | ~97 dB | ~85 dB | 78% |
+
+The [`test/`](./test) directory holds a separate differential harness that
+compares the output against libsoxr (requires cgo and libsoxr).
+
+## Performance
+
+Single core, stereo, 20 ms blocks (`go test -bench Process`), on a recent
+x86-64 desktop; expect roughly these orders of magnitude:
+
+| Converter | 44.1 → 48 kHz | 16 → 48 kHz | 48 → 16 kHz |
+|---|---|---|---|
+| `SincBestQuality` | ~120× real time | ~115× | ~115× |
+| `SincMediumQuality` | ~260× | ~200× | ~230× |
+| `SincFastest` | ~330× | ~310× | ~400× |
+| `Linear` | ~1400× | ~1300× | ~5500× |
+
+## Testing
+
+```sh
+go test ./...                        # full suite, including quality thresholds
+go test -race -short ./...           # skips the slow FFT measurements
+go test -run Report -v               # print the measured quality table
+go test -run '^$' -bench .           # benchmarks
+go test -run '^$' -fuzz FuzzProcess  # fuzz the streaming API
 ```
 
 ## License
