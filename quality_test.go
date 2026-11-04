@@ -138,8 +138,12 @@ func measureAt(conv Converter, ratio, f0 float64) (snrDB, gainDB float64) {
 }
 
 // TestSincQualityReport prints a table of measured SNR / passband gain /
-// stopband rejection for each sinc tier. Run with `go test -run Report -v`.
+// stopband rejection for each sinc tier. It asserts nothing and is slow, so it
+// only runs when its output is visible: `go test -run Report -v`.
 func TestSincQualityReport(t *testing.T) {
+	if testing.Short() || !testing.Verbose() {
+		t.Skip("report only; run with -v (and without -short)")
+	}
 	tiers := []Converter{SincFastest, SincMediumQuality, SincBestQuality}
 	ratios := []float64{2.0, 0.5}
 
@@ -211,6 +215,9 @@ func formatDB(v float64) string {
 // TestSincQualityThresholds asserts the tiers meet ordered, stable minimums.
 // Thresholds are conservative floors, not the typical measured values.
 func TestSincQualityThresholds(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow FFT measurements; skipped with -short")
+	}
 	type want struct {
 		minPassbandSNR float64 // dB, worst case across passband
 		minStopbandRej float64 // dB attenuation, downsample worst case

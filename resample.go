@@ -76,7 +76,9 @@ type Data struct {
 }
 
 // Resampler holds the state of a streaming sample-rate conversion. It is not
-// safe for concurrent use; use one Resampler per stream.
+// safe for concurrent use; use one Resampler per stream. Distinct Resamplers
+// may run concurrently: they share only immutable filter tables, which are
+// built once per converter on first use, so New is cheap.
 type Resampler struct {
 	conv      Converter
 	channels  int
@@ -98,11 +100,11 @@ func New(c Converter, channels int) (*Resampler, error) {
 	case ZeroOrderHold:
 		k = zohKernel{}
 	case SincFastest:
-		k = newSincKernel(sincFastest)
+		k = newSincKernel(sincFastest, channels)
 	case SincMediumQuality:
-		k = newSincKernel(sincMedium)
+		k = newSincKernel(sincMedium, channels)
 	case SincBestQuality:
-		k = newSincKernel(sincBest)
+		k = newSincKernel(sincBest, channels)
 	default:
 		return nil, ErrBadConverter
 	}
@@ -119,7 +121,6 @@ func (r *Resampler) Channels() int { return r.channels }
 // condition as if freshly created.
 func (r *Resampler) Reset() {
 	r.state.reset()
-	r.kernel.reset()
 	r.lastRatio = 0
 	r.started = false
 }
@@ -136,8 +137,16 @@ func (r *Resampler) SetRatio(ratio float64) error {
 }
 
 // Process performs a streaming conversion step. See [Data] for the calling
-// contract. Within a call the ratio is linearly ramped from the ratio of the
-// previous call to d.Ratio, giving smooth speed-up / slow-down effects.
+// contract.
+//
+// When d.Ratio differs from the previous call's ratio, the ratio is ramped
+// linearly from the old value to the new one, giving smooth speed-up /
+// slow-down effects. The ramp is spread over d.OutputFrames (the capacity of
+// Out), not over the frames actually produced: if Out is much larger than the
+// output a call generates, the ramp only partly progresses before the next
+// call starts from d.Ratio. Size Out close to the expected output (about
+// InputFrames*Ratio) for smooth ramps, or use [Resampler.SetRatio] for an
+// immediate step change. This matches libsamplerate's semantics.
 //
 // Note: Process absorbs all InputFrames of d.In into an internal buffer, so
 // InputFramesUsed always equals InputFrames. To drain output that did not fit
@@ -187,21 +196,66 @@ func Simple(in []float32, ratio float64, channels int, c Converter) ([]float32, 
 		return nil, err
 	}
 	inFrames := len(in) / channels
-	// Output size estimate with headroom for filter delay and rounding.
-	outFrames := int(float64(inFrames)*ratio) + 2*r.kernel.maxHalfTaps() + 16
+	// Exact output length is ceil(inFrames*ratio); the headroom only guards
+	// against rounding. The loop below grows the buffer if it is ever short.
+	outFrames := int(math.Ceil(float64(inFrames)*ratio)) + 16
 	out := make([]float32, outFrames*channels)
-	d := &Data{
-		In:           in,
-		Out:          out,
-		InputFrames:  inFrames,
-		OutputFrames: outFrames,
-		Ratio:        ratio,
-		EndOfInput:   true,
+	gen := 0
+
+	// Feed the input in chunks rather than all at once: this bounds the
+	// Resampler's internal history (instead of copying the whole input into it)
+	// and keeps the fractional read position small and precise.
+	for off := 0; ; {
+		end := min(off+simpleChunkFrames, inFrames)
+		d := &Data{
+			In:          in[off*channels : end*channels],
+			InputFrames: end - off,
+			Ratio:       ratio,
+			EndOfInput:  end == inFrames,
+		}
+		for {
+			if gen == outFrames {
+				grow := outFrames/4 + 64
+				out = append(out, make([]float32, grow*channels)...)
+				outFrames += grow
+			}
+			d.Out = out[gen*channels:]
+			d.OutputFrames = outFrames - gen
+			if err := r.Process(d); err != nil {
+				return nil, err
+			}
+			gen += d.OutputFramesGen
+			if gen < outFrames {
+				break // Process stopped for lack of input, not of output space.
+			}
+			d.In, d.InputFrames = nil, 0 // drain what did not fit
+		}
+		if end == inFrames {
+			break
+		}
+		off = end
 	}
-	if err := r.Process(d); err != nil {
-		return nil, err
+	return out[:gen*channels], nil
+}
+
+// simpleChunkFrames is the input block size Simple feeds to Process.
+const simpleChunkFrames = 1 << 14
+
+// positionSnap is the distance, in input samples, within which the accumulated
+// read position is snapped to the nearest integer. Advancing by 1/ratio is
+// rarely exact in binary (1/3, 44100/48000, ...), so without snapping rounding
+// error builds up and positions that should land exactly on an input sample
+// fall just short of it, e.g. emitting 48001 frames for one second of 16 kHz
+// audio upsampled to 48 kHz. Snapping resets the error every time an exact
+// position is reached; 1e-8 samples (~0.2 ps at 48 kHz) is far below audibility
+// and well above the accumulated float64 error.
+const positionSnap = 1e-8
+
+func snapPosition(p float64) float64 {
+	if r := math.Round(p); math.Abs(p-r) < positionSnap {
+		return r
 	}
-	return out[:d.OutputFramesGen*channels], nil
+	return p
 }
 
 // kernel is the per-algorithm interpolation core. Implementations are stateless
@@ -212,13 +266,10 @@ type kernel interface {
 	// (min(ratio, 1)). Downsampling widens the effective filter, so support may
 	// grow as the ratio shrinks.
 	support(ratioClamp float64) (left, right int)
-	// output computes one output sample for channel c at frame index base with
-	// fractional offset frac in [0,1). ratioClamp is min(ratio, 1).
-	output(buf []float32, channels, base, c int, frac, ratioClamp float64) float64
-	// maxHalfTaps returns the largest one-sided support in input frames, used to
-	// size output estimates and priming.
-	maxHalfTaps() int
-	reset()
+	// output computes one output frame at frame index base with fractional
+	// offset frac in [0,1) and writes its channels to dst[:channels].
+	// ratioClamp is min(ratio, 1). base is always in [0, len(buf)/channels).
+	output(buf []float32, channels, base int, frac, ratioClamp float64, dst []float32)
 }
 
 // streamState holds the sample-stream bookkeeping shared by all kernels: a
@@ -283,11 +334,9 @@ func (r *Resampler) streamProcess(d *Data) {
 		}
 
 		frac := st.inPos - float64(base)
-		for c := 0; c < ch; c++ {
-			d.Out[outGen+c] = float32(r.kernel.output(buf, ch, base, c, frac, rc))
-		}
+		r.kernel.output(buf, ch, base, frac, rc, d.Out[outGen:outGen+ch])
 		outGen += ch
-		st.inPos += 1.0 / ratio
+		st.inPos = snapPosition(st.inPos + 1.0/ratio)
 	}
 
 	// Trim history: keep enough left-context for the next output position.
