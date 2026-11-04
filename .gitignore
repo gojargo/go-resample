@@ -13,3 +13,9 @@ coverage.html
 *~
 .idea/
 .vscode/
+
+# Built A/B harness binary (cd test && go build)
+/test/test
+
+# Fuzz corpus generated locally by go test -fuzz
+/testdata/fuzz/
