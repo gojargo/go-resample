@@ -33,6 +33,6 @@ signs:
     artifacts: checksum
     output: true
 
-# Release notes come from CHANGELOG.md (see .github/workflows/release.yml).
-changelog:
-  disable: true
+# Release notes come from CHANGELOG.md, passed with --release-notes by
+# .github/workflows/release.yml. Do not set changelog.disable: it skips the
+# step that loads that file, which leaves the release notes empty.

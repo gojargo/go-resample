@@ -37,7 +37,7 @@ cosign verify-blob \
 sha256sum --check --ignore-missing checksums.txt
 ```
 
-Verify the build provenance of the source archive:
+Verify the build provenance of the source archive (GitHub CLI 2.49 or later):
 
 ```sh
 gh attestation verify go-resample_1.1.0_source.tar.gz --repo gojargo/go-resample
